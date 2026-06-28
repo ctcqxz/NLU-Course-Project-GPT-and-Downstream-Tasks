@@ -7,6 +7,7 @@ Trains and evaluates GPT2SentimentClassifier on SST and CFIMDB
 import random, numpy as np, argparse
 from types import SimpleNamespace
 import csv
+import os
 
 import torch
 import torch.nn.functional as F
@@ -53,19 +54,21 @@ class GPT2SentimentClassifier(torch.nn.Module):
       elif config.fine_tune_mode == 'full-model':
         param.requires_grad = True
 
-    ### TODO: Create any instance variables you need to classify the sentiment of BERT embeddings.
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    # A dropout and a linear classification head on top of GPT's last-token hidden state.
+    self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
+    self.classifier = torch.nn.Linear(config.hidden_size, self.num_labels)
 
 
   def forward(self, input_ids, attention_mask):
     '''Takes a batch of sentences and returns logits for sentiment classes'''
 
-    ### TODO: The final GPT contextualized embedding is the hidden state of the last token.
-    ###       HINT: You should consider what is an appropriate return value given that
-    ###       the training loop currently uses F.cross_entropy as the loss function.
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    # The final GPT contextualized embedding is the hidden state of the last (non-pad) token.
+    last_token = self.gpt(input_ids, attention_mask)['last_token']
+    last_token = self.dropout(last_token)
+    # Return raw logits over the sentiment classes (F.cross_entropy applies softmax internally).
+    logits = self.classifier(last_token)
+    return logits
+
 
 
 
@@ -149,13 +152,13 @@ def load_data(filename, flag='train'):
   num_labels = {}
   data = []
   if flag == 'test':
-    with open(filename, 'r') as fp:
+    with open(filename, 'r', encoding='utf-8') as fp:
       for record in csv.DictReader(fp, delimiter='\t'):
         sent = record['sentence'].lower().strip()
         sent_id = record['id'].lower().strip()
         data.append((sent, sent_id))
   else:
-    with open(filename, 'r') as fp:
+    with open(filename, 'r', encoding='utf-8') as fp:
       for record in csv.DictReader(fp, delimiter='\t'):
         sent = record['sentence'].lower().strip()
         sent_id = record['id'].lower().strip()
@@ -308,7 +311,7 @@ def train(args):
 def test(args):
   with torch.no_grad():
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-    saved = torch.load(args.filepath)
+    saved = torch.load(args.filepath, weights_only=False)
     config = saved['model_config']
     model = GPT2SentimentClassifier(config)
     model.load_state_dict(saved['model'])
@@ -351,6 +354,8 @@ def get_args():
                       help='last-linear-layer: the GPT parameters are frozen and the task specific head parameters are updated; full-model: GPT parameters are updated as well',
                       choices=('last-linear-layer', 'full-model'), default="last-linear-layer")
   parser.add_argument("--use_gpu", action='store_true')
+  parser.add_argument("--skip-train", action='store_true',
+                      help='Skip training and directly evaluate using the existing saved checkpoint (sst-classifier.pt / cfimdb-classifier.pt).')
 
   parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
   parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
@@ -359,6 +364,16 @@ def get_args():
 
   args = parser.parse_args()
   return args
+
+
+def maybe_train(config, skip_train):
+  '''Train the model unless skip_train is set AND a checkpoint already exists.'''
+  if skip_train and os.path.exists(config.filepath):
+    print(f"--skip-train set: skipping training, will evaluate existing checkpoint {config.filepath}")
+    return
+  if skip_train:
+    print(f"--skip-train set but checkpoint {config.filepath} not found; training is required.")
+  train(config)
 
 
 if __name__ == "__main__":
@@ -381,7 +396,7 @@ if __name__ == "__main__":
     test_out='predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
   )
 
-  train(config)
+  maybe_train(config, args.skip_train)
 
   print('Evaluating on SST...')
   test(config)
@@ -402,7 +417,7 @@ if __name__ == "__main__":
     test_out='predictions/' + args.fine_tune_mode + '-cfimdb-test-out.csv'
   )
 
-  train(config)
+  maybe_train(config, args.skip_train)
 
   print('Evaluating on cfimdb...')
   test(config)

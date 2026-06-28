@@ -71,8 +71,14 @@ class ParaphraseGPT(nn.Module):
     """
 
     'Takes a batch of sentences and produces embeddings for them.'
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    # Run GPT-2 and take the hidden state of the last (non-pad) token.
+    last_token = self.gpt(input_ids, attention_mask)['last_token']
+    # Project to the vocabulary using the tied word embeddings. We compare the logit
+    # of the "yes" token (8505) vs the "no" token (3919) to decide the label, so the
+    # loss/eval (which run argmax over the vocab and compare against those token ids) work directly.
+    logits = self.gpt.hidden_state_to_token(last_token)
+    return logits
+
 
 
 
@@ -96,6 +102,14 @@ def train(args):
   # Create the data and its corresponding datasets and dataloader.
   para_train_data = load_paraphrase_data(args.para_train)
   para_dev_data = load_paraphrase_data(args.para_dev)
+
+  # Optionally use only a small subset to quickly smoke-test the pipeline (e.g. on CPU).
+  if getattr(args, 'max_train_samples', 0) and args.max_train_samples > 0:
+    para_train_data = para_train_data[:args.max_train_samples]
+    print(f"[subset] using {len(para_train_data)} train examples")
+  if getattr(args, 'max_eval_samples', 0) and args.max_eval_samples > 0:
+    para_dev_data = para_dev_data[:args.max_eval_samples]
+    print(f"[subset] using {len(para_dev_data)} dev examples")
 
   para_train_data = ParaphraseDetectionDataset(para_train_data, args)
   para_dev_data = ParaphraseDetectionDataset(para_dev_data, args)
@@ -151,7 +165,7 @@ def train(args):
 def test(args):
   """Evaluate your model on the dev and test datasets; save the predictions to disk."""
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  saved = torch.load(args.filepath)
+  saved = torch.load(args.filepath, weights_only=False)
 
   model = ParaphraseGPT(saved['args'])
   model.load_state_dict(saved['model'])
@@ -161,6 +175,12 @@ def test(args):
 
   para_dev_data = load_paraphrase_data(args.para_dev)
   para_test_data = load_paraphrase_data(args.para_test, split='test')
+
+  # Optionally evaluate on a small subset to quickly smoke-test the pipeline (e.g. on CPU).
+  if getattr(args, 'max_eval_samples', 0) and args.max_eval_samples > 0:
+    para_dev_data = para_dev_data[:args.max_eval_samples]
+    para_test_data = para_test_data[:args.max_eval_samples]
+    print(f"[subset] using {len(para_dev_data)} dev / {len(para_test_data)} test examples")
 
   para_dev_data = ParaphraseDetectionDataset(para_dev_data, args)
   para_test_data = ParaphraseDetectionTestDataset(para_test_data, args)
@@ -197,6 +217,10 @@ def get_args():
   parser.add_argument("--seed", type=int, default=11711)
   parser.add_argument("--epochs", type=int, default=10)
   parser.add_argument("--use_gpu", action='store_true')
+  parser.add_argument("--max_train_samples", type=int, default=0,
+                      help="If > 0, only use the first N training examples (quick smoke test, especially on CPU). 0 = use all.")
+  parser.add_argument("--max_eval_samples", type=int, default=0,
+                      help="If > 0, only use the first N dev/test examples for evaluation. 0 = use all.")
 
   parser.add_argument("--batch_size", help='sst: 64, cfimdb: 8 can fit a 12GB GPU', type=int, default=8)
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)

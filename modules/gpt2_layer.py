@@ -23,25 +23,26 @@ class GPT2Layer(nn.Module):
 
   def add(self, input, output, dense_layer, dropout):
     """
-    TODO: Implement this helper method for the forward function.
-      - This function is applied after the multi-head attention layer as well as after the feed forward layer.
-      - GPT-2 layer applies dropout to the transformed output of each sub-layer,
-        before it is added to the sub-layer input. WE DO NOT APPLY THE LAYER NORM
-        IN THIS FUNCTION.
+    This helper applies the output projection + dropout to a sub-layer's output,
+    then adds the residual (the sub-layer input). No layer norm here.
     """
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    return input + dropout(dense_layer(output))
 
 
   def forward(self, hidden_states, attention_mask):
     """
-    TODO: Implement the forward pass. Some key points to consider:
-           - A multi-head attention layer (CausalSelfAttention) that computes self-attention based on masked inputs.
-           - Layer normalization applied *before* the attention layer and feed-forward layer.
-           - Apply dropout, residual connection, and layer normalization according to the plot in the assignment. (Use self.add)
-           - A feed-forward layer that applies transformations to further refine the hidden states.
+    GPT-2 uses a pre-LayerNorm transformer block:
+      - LayerNorm -> self-attention -> dense/dropout -> residual add
+      - LayerNorm -> feed-forward (dense + gelu) -> dense/dropout -> residual add
     """
+    # Multi-head self-attention sub-layer (pre-LN).
+    attn_output = self.self_attention(self.attention_layer_norm(hidden_states), attention_mask)
+    hidden_states = self.add(hidden_states, attn_output, self.attention_dense, self.attention_dropout)
 
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    # Feed-forward sub-layer (pre-LN).
+    ff_output = self.interm_af(self.interm_dense(self.out_layer_norm(hidden_states)))
+    hidden_states = self.add(hidden_states, ff_output, self.out_dense, self.out_dropout)
+
+    return hidden_states
+
 

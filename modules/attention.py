@@ -1,7 +1,9 @@
+import math
 import torch
 
 from einops import rearrange
 from torch import nn
+
 
 
 class CausalSelfAttention(nn.Module):
@@ -32,9 +34,29 @@ class CausalSelfAttention(nn.Module):
     return proj
 
   def attention(self, key, query, value, attention_mask):
+    # key, query, value: [bs, num_heads, seq_len, head_size]
+    # 1. Scaled dot-product scores: [bs, num_heads, seq_len, seq_len].
+    scores = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(self.attention_head_size)
 
-    ### YOUR CODE HERE
-    raise NotImplementedError
+    # 2. Causal mask: each token can only attend to itself and previous tokens.
+    seq_len = scores.size(-1)
+    causal_mask = torch.triu(
+      torch.ones(seq_len, seq_len, dtype=torch.bool, device=scores.device), diagonal=1
+    )
+    scores = scores.masked_fill(causal_mask, float('-inf'))
+
+    # 3. Add the padding mask ([bs, 1, 1, seq_len], 0 for real tokens, large negative for padding).
+    scores = scores + attention_mask
+
+    # 4. Normalize into probabilities and apply dropout.
+    probs = torch.softmax(scores, dim=-1)
+    probs = self.dropout(probs)
+
+    # 5. Weighted sum of values, then merge the heads back: [bs, seq_len, hidden_size].
+    context = torch.matmul(probs, value)
+    context = rearrange(context, 'b h t d -> b t (h d)')
+    return context
+
 
 
   def forward(self, hidden_states, attention_mask):
